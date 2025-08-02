@@ -1,2 +1,2 @@
-from .dataset import CrackSegDataset, CrackSegPatchedDataset
+from .dataset import CrackSegDataset
 from .datamodule import SegDatasetModule

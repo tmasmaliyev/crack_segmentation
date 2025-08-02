@@ -24,13 +24,23 @@ class FocalLoss(nn.Module):
         preds : torch.Tensor,
         targets : torch.Tensor   
     ) -> float:
-        loss = 10 * self.calculate_focal(preds, targets)
-        loss = 0
+        loss = self.calculate_focal(preds, targets) + self.tversky_loss(preds, targets)
 
         if self.use_dice_loss:
             loss += self.dice(preds, targets)
 
         return loss
+    
+    def tversky_loss(self, preds, targets, alpha=0.3, beta=0.7):
+        pred = F.softmax(preds, dim=1)[:, 1, :, :]
+        targets = targets.float()
+        
+        tp = (pred * targets).sum()
+        fp = (pred * (1 - targets)).sum()
+        fn = ((1 - pred) * targets).sum()
+        
+        tversky = tp / (tp + alpha * fp + beta * fn + 1e-5)
+        return 1 - tversky
     
     def calculate_focal(
         self, 

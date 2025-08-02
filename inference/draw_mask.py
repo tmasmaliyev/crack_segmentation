@@ -1,12 +1,46 @@
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
 
+from metrics.adaptive_threshold import calculate_adaptive_threshold
+
 import numpy as np
+import torch
+
+def _transform_patches(x: torch.Tensor, patch_size : int):
+    c, h, w = x.shape
+
+    x = x.unfold(1, patch_size, patch_size).\
+          unfold(2, patch_size, patch_size)
+    x = x.permute(1, 2, 0, 3, 4).contiguous() 
+    x = x.view(-1, c, patch_size, patch_size) 
+
+    resized = F.interpolate(x, size=(256, 256), mode='bilinear', align_corners=True)
+
+    return resized
+
+def combine_patches(patches: torch.Tensor, grid_size: int):
+    """
+    patches: [N, C, H, W] where N = grid_size x grid_size
+    grid_size: number of patches per row/column (e.g., 7)
+
+    Returns:
+        image: [C, H_total, W_total]
+    """
+    N, C, H, W = patches.shape
+    assert N == grid_size ** 2, "Patch count must match grid size"
+
+    patches = patches.view(grid_size, grid_size, C, H, W)  # [grid_h, grid_w, C, H, W]
+    patches = patches.permute(2, 0, 3, 1, 4)               # [C, grid_h, H, grid_w, W]
+    patches = patches.contiguous().view(C, grid_size * H, grid_size * W)  # [C, H_total, W_total]
+
+    return patches
 
 def draw_plot(
     seg_dataset,
     model,
-    ndata: int
+    ndata: int,
+    general_transform,
+    channel_normalizer
 ):
     fig, axs = plt.subplots(
         nrows=ndata, 
@@ -20,16 +54,27 @@ def draw_plot(
         img_arr = seg_dataset.get_image(random_nums[i])
         mask_arr = seg_dataset.get_mask(random_nums[i])
 
-        axs[i][0].imshow(img_arr)
-        axs[i][1].imshow(mask_arr)
+        augmented = general_transform(image=img_arr, mask=mask_arr)
+        image = augmented['image']
+        mask = augmented['mask']
 
-        img, masks = seg_dataset[random_nums[i]]
-        img = img.view(1, *img.shape)
+        axs[i][0].imshow(image)
+        axs[i][1].imshow(mask)
 
-        output = model(img)
-        predicted_prob = F.softmax(output, dim=1)[:, 1, :, :]
+        augmented = channel_normalizer(image=image, mask=mask)
 
-        predicted_mask = (predicted_prob > 0.2).int() * 255
+        image = augmented['image']
+        image = image.view(1, *image.shape)
+
+        mask = (mask > 127).astype(float)
+        mask = torch.from_numpy(mask)
+
+        outputs = model(image)
+        thresholds = calculate_adaptive_threshold(outputs)
+        thresholds = torch.Tensor(thresholds).view(-1, 1, 1)
+
+        predicted_prob = F.softmax(outputs, dim=1)[:, 1, :, :]
+        predicted_mask = (predicted_prob > thresholds).int() * 255
 
         axs[i][2].imshow(predicted_mask.cpu().numpy().reshape(predicted_mask.shape[1:]))
     

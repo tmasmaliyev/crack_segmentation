@@ -1,5 +1,5 @@
 from torch.utils.data import Dataset, DataLoader
-from torchvision import transforms
+import albumentations as A
 
 from typing import Dict
 
@@ -10,7 +10,7 @@ class SegDatasetModule:
         batch_size : int, 
         num_workers : int,
         dataset_class : Dataset,
-        transform : transforms.Compose | None = None
+        transform : A.Compose | None = None
     ) -> None:
         
         self.root_dir = root_dir
@@ -19,25 +19,28 @@ class SegDatasetModule:
         self.dataset_class = dataset_class
         self.transform = transform
 
-        if self.transform is None:
-            self.transform = transforms.Compose([
-                transforms.ToTensor()
-            ])
+        self.channel_means = [0.485, 0.456, 0.406]
+        self.channel_stds  = [0.229, 0.224, 0.225]
 
         self.paths = {
             'train' : {
                 'image_dir' : f'{root_dir}/Train/images',
                 'mask_dir' : f'{root_dir}/Train/masks',
-                'transform' : self.transform
+                'transform' : self.transform,
+                'channel_means' : self.channel_means,
+                'channel_stds' : self.channel_stds
             },
             'validation' : {
                 'image_dir' : f'{root_dir}/Validation/images',
                 'mask_dir' : f'{root_dir}/Validation/masks',
-                'transform' : self.transform
+                'channel_means' : self.channel_means,
+                'channel_stds' : self.channel_stds
             },
             'test' : {
                 'image_dir' : f'{root_dir}/Test/images',
-                'mask_dir' : f'{root_dir}/Test/masks'
+                'mask_dir' : f'{root_dir}/Test/masks',
+                'channel_means' : self.channel_means,
+                'channel_stds' : self.channel_stds
             }
         }
     

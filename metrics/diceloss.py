@@ -29,7 +29,6 @@ class DiceLoss(nn.Module):
         targets : torch.Tensor
     ) -> float:
         probs = F.softmax(preds, dim=1)
-        # probs_fg = F.sigmoid(preds)
 
         probs_fg = probs[:, 1, :, :]
 

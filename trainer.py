@@ -1,9 +1,11 @@
 from model.unet import SUNet
 from model.msunet import MSUNet
-from dataset import CrackSegDataset, CrackSegPatchedDataset, SegDatasetModule
-from loss.diceloss import DiceLoss
-from loss.focal import FocalLoss
-from loss.iou import calculate_iou
+from dataset import CrackSegDataset, SegDatasetModule
+
+# from metrics.diceloss import DiceLoss
+from metrics.focal import FocalLoss
+from metrics import calculate_iou, calculate_recall, calculate_precision
+from metrics.adaptive_threshold import calculate_adaptive_threshold
 
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -37,8 +39,8 @@ class SegTrainer:
             model.load_state_dict(state_dict)
             print("Model weights loaded successfully!")
 
-        self.criterion = FocalLoss(use_dice_loss=True)
-        self.optimizer = optim.Adam(self.model.parameters(), lr=learning_rate)
+        self.criterion = FocalLoss(use_dice_loss=False)
+        self.optimizer = optim.AdamW(self.model.parameters(), lr=learning_rate, weight_decay=1e-3)
 
         self.train_loader = train_loader
         self.validation_loader = validation_loader
@@ -57,18 +59,24 @@ class SegTrainer:
 
             total_loss = 0
             total_iou = 0
+            total_recall = 0
+            total_precision = 0
+
             loop = tqdm(self.train_loader, desc=f'Epoch [{epoch} / {num_epochs}]')
 
             for images, masks in loop:
                 images = images.to(self.device).float()
-                # images = images.view(-1, *images.shape[2:])
 
                 masks = masks.to(self.device).long()
-                # masks = masks.view(-1, *masks.shape[2:])
-
                 outputs = self.model(images)
+
                 loss = self.criterion(outputs, masks)
+                # thresholds = calculate_adaptive_threshold(outputs)
+                # thresholds = torch.Tensor(thresholds).to(self.device)
+
                 iou = calculate_iou(outputs, masks, 0.5) * 100
+                recall = calculate_recall(outputs, masks, 0.5) * 100
+                precision = calculate_precision(outputs, masks, 0.5) * 100
 
                 self.optimizer.zero_grad()
                 loss.backward()
@@ -76,13 +84,20 @@ class SegTrainer:
 
                 total_loss += loss.item()
                 total_iou += iou.item()
+                total_recall += recall.item()
+                total_precision += precision.item()
+
                 loop.set_postfix(
                     loss = loss.item(), 
-                    iou = iou.item()
+                    iou = iou.item(),
+                    recall = recall.item(),
+                    precision = precision.item()
                 )
 
             print(f'Epoch {epoch}, Loss : {total_loss / len(self.train_loader) : .4f} '
-                  f'Accuracy : {total_iou / len(self.train_loader) : .4f}')
+                  f'IoU : {total_iou / len(self.train_loader) : .4f} ' + 
+                  f'Recall : {total_recall / len(self.train_loader) : .4f}' + 
+                  f'Precision : {total_precision / len(self.train_loader) : .4f}')
 
             
             if save_model_dir and evaluate_validation:
@@ -99,35 +114,117 @@ class SegTrainer:
             elif evaluate_validation:
                 self.evaluate()
 
+    def _transform_patches(self, x: torch.Tensor, patch_size : int):
+        c, h, w = x.shape
+
+        x = x.unfold(1, patch_size, patch_size).\
+            unfold(2, patch_size, patch_size)
+        x = x.permute(1, 2, 0, 3, 4).contiguous() 
+        x = x.view(-1, c, patch_size, patch_size) 
+
+        resized = nn.functional.interpolate(x, size=(256, 256), mode='bilinear', align_corners=True)
+
+        return resized
+
     def evaluate(self) -> Tuple[float, float]:
         self.model.eval()
+
         total_loss = 0
         total_iou = 0
+        total_recall = 0
+        total_precision = 0
+
+        with torch.no_grad():
+            loop = tqdm(self.test_loader, desc='Evaluating validation')
+
+            for images, masks in loop:
+                images = images.to(self.device)
+
+                masks = masks.to(self.device).long()
+
+                outputs = self.model(images)
+                thresholds = calculate_adaptive_threshold(outputs)
+                thresholds = torch.Tensor(thresholds).to(self.device)
+
+                evaluation_loss = self.criterion(outputs, masks)
+                evaluation_iou = calculate_iou(outputs, masks, 0.5) * 100
+                evaluation_recall = calculate_recall(outputs, masks, 0.5) * 100
+                evaluation_precision = calculate_precision(outputs, masks, 0.5) * 100
+
+                total_loss += evaluation_loss.item()
+                total_iou += evaluation_iou.item()
+                total_recall += evaluation_recall.item()
+                total_precision += evaluation_precision.item()
+
+                loop.set_postfix(
+                    loss = evaluation_loss.item(), 
+                    iou = evaluation_iou.item(),
+                    recall = evaluation_recall.item(),
+                    precision = evaluation_precision.item()
+                )
+            
+            print(f'Loss : {total_loss / len(self.validation_loader) : .4f} ' + 
+                  f'IoU : {total_iou / len(self.validation_loader) : .4f} ' + 
+                  f'Recall : {total_recall / len(self.validation_loader) : .4f} '  + 
+                  f'Precision : {total_precision / len(self.validation_loader) : .4f}')
+        
+        return total_loss / len(self.validation_loader), \
+               100 * (total_iou / len(self.validation_loader))
+    
+    def evaluate2(self) -> Tuple[float, float]:
+        self.model.eval()
+
+        total_loss = 0
+        total_iou = 0
+        total_recall = 0
+        total_precision = 0
 
         with torch.no_grad():
             loop = tqdm(self.validation_loader, desc='Evaluating validation')
 
             for images, masks in loop:
                 images = images.to(self.device)
-                # images = images.view(-1, *images.shape[2:])
+                masks = masks.to(self.device).float()
 
-                masks = masks.to(self.device).long()
-                # masks = masks.view(-1, *masks.shape[2:])
+                for i in range(images.shape[0]):
+                    img = self._transform_patches(images[i], 64)
+                    msk = self._transform_patches(masks[i].view(1, *masks[i].shape), 64)
 
-                outputs = self.model(images)
-                evaluation_loss = self.criterion(outputs, masks)
-                evaluation_iou = calculate_iou(outputs, masks, 0.5) * 100
+                    for j in range(49):
+                        outputs = self.model(img[j].view(1, *img[j].shape))
 
-                total_loss += evaluation_loss.item()
-                total_iou += evaluation_iou.item()
+                        evaluation_loss = self.criterion(outputs, msk[j].long())
+                        evaluation_iou = calculate_iou(outputs, msk[j], 0.5) * 100
+                        evaluation_recall = calculate_recall(outputs, msk[j], 0.5) * 100
+                        evaluation_precision = calculate_precision(outputs, msk[j], 0.5) * 100
+                    
+                        total_loss += evaluation_loss.item()
+                        total_iou += evaluation_iou.item()
+                        total_recall += evaluation_recall.item()
+                        total_precision += evaluation_precision.item()
+
+                    total_loss /= 49
+                    total_iou /= 49
+                    total_recall /= 49
+                    total_precision /= 49
+                
+                total_loss /= 2
+                total_iou /= 2
+                total_recall /= 2
+                total_precision /= 2
+
 
                 loop.set_postfix(
                     loss = evaluation_loss.item(), 
-                    iou = evaluation_iou.item()
+                    iou = evaluation_iou.item(),
+                    recall = evaluation_recall.item(),
+                    precision = evaluation_precision.item()
                 )
             
             print(f'Loss : {total_loss / len(self.validation_loader) : .4f} ' + 
-                  f'Accuracy : {total_iou / len(self.validation_loader) : .4f}')
+                  f'IoU : {total_iou / len(self.validation_loader) : .4f} ' + 
+                  f'Recall : {total_recall / len(self.validation_loader) : .4f} '  + 
+                  f'Precision : {total_precision / len(self.validation_loader) : .4f}')
         
         return total_loss / len(self.validation_loader), \
                100 * (total_iou / len(self.validation_loader))

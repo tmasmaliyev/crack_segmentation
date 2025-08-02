@@ -1,5 +1,5 @@
 from dataset import CrackSegDataset
-from inference.draw_mask import draw_plot
+from visualize.draw_mask import draw_plot
 
 from model.msunet import MSUNet
 from model.unet16 import Unet16
@@ -8,7 +8,6 @@ from model.unet16att import AttUnet16
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
 
-import cv2
 import torch
 from torchvision import transforms
 from torchvision.models.vgg import VGG16_Weights
@@ -26,9 +25,6 @@ if __name__ == '__main__':
     transform = A.Compose([
         A.HorizontalFlip(p=0.2),
         A.VerticalFlip(p=0.2),
-        # A.Rotate(limit=(-90, 90), p=0.2, interpolation=cv2.INTER_AREA),
-        # A.RandomBrightnessContrast(p=0.2),
-        # A.GaussNoise(p=0.1)
     ])
 
     channel_normalizer = A.Compose([

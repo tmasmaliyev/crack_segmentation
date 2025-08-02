@@ -74,7 +74,7 @@ def draw_plot(
         thresholds = torch.Tensor(thresholds).view(-1, 1, 1)
 
         predicted_prob = F.softmax(outputs, dim=1)[:, 1, :, :]
-        predicted_mask = (predicted_prob > thresholds).int() * 255
+        predicted_mask = (predicted_prob > 0.5).int() * 255
 
         axs[i][2].imshow(predicted_mask.cpu().numpy().reshape(predicted_mask.shape[1:]))
     
